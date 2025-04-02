@@ -1,6 +1,6 @@
 
 部署流程
-1. 安装必要环境
+1.安装必要环境
 确保已安装以下工具：
 Python 3.8 或更高版本
 pip 包管理器
@@ -11,7 +11,7 @@ sudo apt update
 sudo apt upgrade
 sudo apt install python3 python3-pip
 
-2. 安装依赖
+2.安装依赖
 pip install -r requirements.txt
 
 3.api申请
