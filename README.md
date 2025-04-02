@@ -21,6 +21,8 @@ https://api.tu-zi.com/topup
 
 开发测试的话，5元（RMB），足够了
 
+在代码中仅修改OPENAI_API_KEY = "xxxx" #更新为自己的APIKey这里即可开始运行使用。默认使用grok-3-reasoner模型，需要其他请在代码中修改替换
+
 4.运行需要使用命令行：
 
 streamlit run app.py
