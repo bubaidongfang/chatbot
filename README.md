@@ -33,7 +33,7 @@ nohup streamlit run app.py > streamlit.log 2>&1 &
 访问http://xxx:8501/
 正常可开始使用
 
-
+开箱即用下载app.py即可，其他文件都是T姐的源码，如有需要可以二次开发使用，感谢原作者T姐Theclues，配合炒币工具箱效果更佳，https://t.me/SuperClues_bot
 
 
 
