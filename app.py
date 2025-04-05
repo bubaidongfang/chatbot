@@ -28,7 +28,7 @@ st.set_page_config(
 )
 
 # API配置
-OPENAI_API_KEY = "sk-ZLUS9OzFCTnOdHh6rI4YDjhInMEdEAP8n5p3Ete1Ckkf0LZI"
+OPENAI_API_KEY = "xxxxxxx"
 BINANCE_API_URL = "https://api-gcp.binance.com"  # 更新为官方推荐的现货API端点
 BINANCE_FUTURES_URL = "https://fapi.binance.com"
 
@@ -782,16 +782,18 @@ class FundFlowAnalyzer:
             return f"{value:.2f}"
 
     def get_klines_parallel(self, symbols, is_futures=False, max_workers=20):
-        """使用线程池并行获取多个交易对的K线数据（使用倒数第二根已完成的日线蜡烛图）"""
+        """使用线程池并行获取多个交易对的K线数据（基于最近完成的 4H K线）"""
         results = []
         def fetch_kline(symbol):
             try:
                 base_url = self.futures_base_url if is_futures else self.spot_base_url
                 endpoint = "/klines"
                 now = datetime.utcnow()
-                today_start = datetime(now.year, now.month, now.day, 0, 0, 0)
-                end_time = int(today_start.timestamp() * 1000)
-                start_time = int((today_start - timedelta(days=2)).timestamp() * 1000)
+                # 计算最近完成的 4H 时间段
+                hours_since_midnight = now.hour + now.minute / 60 + now.second / 3600
+                last_4h_start = now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=(hours_since_midnight % 4))
+                end_time = int(last_4h_start.timestamp() * 1000)
+                start_time = int((last_4h_start - timedelta(hours=4)).timestamp() * 1000)
                 params = {
                     'symbol': symbol,
                     'interval': '4h',
@@ -804,7 +806,7 @@ class FundFlowAnalyzer:
                 if not data or len(data) < 2:
                     logger.error(f"数据不足 {symbol}: 返回 {len(data)} 根K线")
                     return None
-                k = data[1]
+                k = data[1]  # 取倒数第二根已完成的 4H K线
                 open_time = datetime.fromtimestamp(k[0] / 1000).strftime('%Y-%m-%d %H:%M:%S')
                 close_time = datetime.fromtimestamp(k[6] / 1000).strftime('%Y-%m-%d %H:%M:%S')
                 return {
@@ -834,52 +836,33 @@ class FundFlowAnalyzer:
         return results
 
     def send_to_deepseek(self, data):
+        """发送数据到 DeepSeek API 生成分析报告"""
         prompt = (
-    "基于Binance现货和期货市场USDT交易对前4H完整数据，生成专业资金流向分析报告，需包含以下维度：\n\n"
-    
-    "### 分析框架要求\n"
-    "1. **主力资金行为解码**（需包含）：\n"
-    "   - 异常交易识别：高成交量低波动（量价背离）、大单净流入时段定位\n"
-    "   - 订单簿深度分析：买卖盘压力（volume imbalance）、挂单集群特征\n"
-    "   - 期现套利模式：对冲策略识别（如现货拉抬+期货对冲）\n\n"
-    
-    "2. **市场阶段诊断**（需量化）：\n"
-    "   - 价格波动率与资金流向相关性（Pearson系数）\n"
-    "   - 资金流领先指标分析（Granger因果检验时间差）\n"
-    "   - 多周期资金趋势背离检测（15min/4H/Daily）\n\n"
-    
-    "3. **交易策略构建**（必须包含）：\n"
-    "   - 多空动能矩阵：现货/期货资金流向组合分析\n"
-    "   - 风险对冲建议：跨期现、跨品种对冲比例测算\n"
-    "   - 关键位验证：支撑/阻力位资金堆积量统计\n\n"
-    
-    "### 数据解析规范\n"
-    "1. 使用市场微观结构分析方法，解析以下指标：\n"
-    "   - 大单净流入占比（>10万美元订单）\n"
-    "   - 资金流压力指数（bid/ask volume ratio）\n"
-    "   - 期货资金费率异常波动检测\n\n"
-    
-    "2. 对比分析必须包含：\n"
-    "   - 期现市场订单簿冲击成本比较\n"
-    "   - 主力合约展期行为追踪\n"
-    "   - 异常交易时段TICK数据回测\n\n"
-    
-    "### 输出规范\n"
-    "1. 采用四维分析结构：\n"
-    "   [主力行为解码]→[市场阶段诊断]→[短期趋势预判]→[交易策略矩阵]\n"
-    
-    "2. 数值呈现要求：\n"
-    "   - 关键指标使用**粗体**标注阈值突破情况（如volume imbalance>5%）\n"
-    "   - 概率化表述（p值、置信区间）\n"
-    "   - 动态支撑/阻力位标注资金验证次数\n\n"
-    
-    "3. 使用专业对比表格，包含：\n"
-    "   - 多空动能矩阵（现货/期货资金流组合）\n"
-    "   - 期现套利机会扫描（资金费率差异+基差）\n"
-    "   - 主力行为模式对照表（吸筹/派发/对敲）\n\n"
-    
-    "数据源：\n" + json.dumps(data, indent=2) +
-    "\n\n以Markdown格式输出，包含专业术语但避免冗余描述，重点突出可操作信号。"
+            "基于Binance现货和期货市场USDT交易对前4H已完成收盘数据的资金流入流出情况，生成专业资金流向分析报告。数据如下：\n" +
+            json.dumps(data, indent=2, ensure_ascii=False) +
+            "\n\n"
+            "### 分析要求\n"
+            "1. **主力资金行为解读**：\n"
+            "   - 识别现货和期货市场中相同交易对的资金流向特征（净流入/流出）。\n"
+            "   - 分析潜在主力行为（如吸筹、拉抬、对冲、对倒），结合量价关系（高成交量低波动等）。\n"
+            "   - 评估订单簿压力（volume imbalance）和资金流向与价格的相关性。\n"
+            "2. **价格阶段判断**：\n"
+            "   - 根据资金流向推断市场阶段（整理/上涨/下跌），量化置信度（如相关性或趋势强度）。\n"
+            "   - 对比现货和期货市场的趋势一致性及主导关系。\n"
+            "3. **短期趋势预判（4-8小时）**：\n"
+            "   - 预测主要交易对的短期方向（看涨/看跌/震荡），标示关键支撑/阻力位。\n"
+            "4. **交易策略建议**：\n"
+            "   - 针对主要交易对（如BTCUSDT、ETHUSDT）提出具体操作策略（方向、入场点、止损、目标）。\n"
+            "   - 提供风险收益比和对冲建议。\n"
+            "\n"
+            "### 输出规范\n"
+            "- 使用Markdown格式，结构为：[主力资金行为解读]→[价格阶段判断]→[短期趋势预判]→[交易策略建议]。\n"
+            "- 语言简洁专业，突出可操作信号，避免冗余描述。\n"
+            "- 数据呈现：\n"
+            "  - 关键指标（如volume imbalance、correlation）用**粗体**标注。\n"
+            "  - 表格对比现货/期货资金流向及策略要点。\n"
+            "  - 趋势置信度以百分比或p值表述。\n"
+            "- 以中文回复，确保逻辑清晰，适用于交易决策。\n"
         )
         try:
             response = client.chat.completions.create(
@@ -1394,7 +1377,7 @@ if __name__ == "__main__":
     def run_scheduler():
         while True:
             schedule.run_pending()
-            time.sleep(1)
+            time.sleep(10)
     threading.Thread(target=run_scheduler, daemon=True).start()
     
     # 运行主程序
