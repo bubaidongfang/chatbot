@@ -28,7 +28,7 @@ st.set_page_config(
 )
 
 # API配置
-OPENAI_API_KEY = "xxx"
+OPENAI_API_KEY = "xxxxxxx"  # 更新为自己在tu-zi中的API
 BINANCE_API_URL = "https://api-gcp.binance.com"  # 更新为官方推荐的现货API端点
 BINANCE_FUTURES_URL = "https://fapi.binance.com"
 
@@ -781,8 +781,8 @@ class FundFlowAnalyzer:
         else:
             return f"{value:.2f}"
 
-    def get_klines_parallel(self, symbols, is_futures=False, max_workers=20):
-        """使用线程池并行获取多个交易对的K线数据（基于最近完成的 4H K线）"""
+    def get_klines_parallel(self, symbols, is_futures=False, max_workers=20, include_latest=False):
+        """使用线程池并行获取多个交易对的K线数据（基于最近完成的 4H K线，可选最新价格）"""
         results = []
         failed_symbols = []
         def fetch_kline(symbol):
@@ -790,11 +790,11 @@ class FundFlowAnalyzer:
                 base_url = self.futures_base_url if is_futures else self.spot_base_url
                 endpoint = "/klines"
                 now = datetime.utcnow()
-                # 计算当前时间所在的 4H 周期起点
+                # 计算最近完成的 4H 周期
                 hours_since_day_start = now.hour + now.minute / 60 + now.second / 3600
-                last_4h_offset = int(hours_since_day_start // 4) * 4  # 对齐到最近的4H整点
+                last_4h_offset = int(hours_since_day_start // 4) * 4
                 last_4h_start = now.replace(minute=0, second=0, microsecond=0, hour=0) + timedelta(hours=last_4h_offset)
-                if last_4h_start > now:  # 如果超前，退回到上一个周期
+                if last_4h_start > now:
                     last_4h_start -= timedelta(hours=4)
                 end_time = int(last_4h_start.timestamp() * 1000)
                 start_time = int((last_4h_start - timedelta(hours=4)).timestamp() * 1000)
@@ -805,20 +805,17 @@ class FundFlowAnalyzer:
                     'endTime': end_time,
                     'limit': 2
                 }
-                logger.info(f"请求 {symbol}: start={datetime.fromtimestamp(start_time/1000)}, end={datetime.fromtimestamp(end_time/1000)}")
                 response = requests.get(f"{base_url}{endpoint}", params=params)
-                response.raise_for_status()  # 检查 HTTP 状态码
+                response.raise_for_status()
                 data = response.json()
                 if not data or len(data) < 2:
                     logger.error(f"数据不足 {symbol}: 返回 {len(data)} 根K线")
                     return None
-                k = data[-1]  # 取最后一根已完成的 4H K线
-                open_time = datetime.fromtimestamp(k[0] / 1000).strftime('%Y-%m-%d %H:%M:%S')
-                close_time = datetime.fromtimestamp(k[6] / 1000).strftime('%Y-%m-%d %H:%M:%S')
-                return {
+                k = data[-1]
+                result = {
                     'symbol': symbol,
-                    'open_time': open_time,
-                    'close_time': close_time,
+                    'open_time': datetime.fromtimestamp(k[0] / 1000).strftime('%Y-%m-%d %H:%M:%S'),
+                    'close_time': datetime.fromtimestamp(k[6] / 1000).strftime('%Y-%m-%d %H:%M:%S'),
                     'open': float(k[1]),
                     'high': float(k[2]),
                     'low': float(k[3]),
@@ -830,6 +827,21 @@ class FundFlowAnalyzer:
                     'taker_buy_quote_volume': float(k[10]),
                     'net_inflow': 2 * float(k[10]) - float(k[7])
                 }
+                # 获取最新价格（可选）
+                if include_latest:
+                    latest_params = {
+                        'symbol': symbol,
+                        'interval': '1m',
+                        'limit': 1
+                    }
+                    latest_response = requests.get(f"{base_url}{endpoint}", params=latest_params)
+                    latest_response.raise_for_status()
+                    latest_data = latest_response.json()
+                    if latest_data and len(latest_data) > 0:
+                        result['latest_price'] = float(latest_data[0][4])  # 最新收盘价
+                    else:
+                        result['latest_price'] = result['close']  # 回退到 4H 收盘价
+                return result
             except Exception as e:
                 logger.error(f"获取 {symbol} 数据出错: {e}")
                 return None
@@ -894,25 +906,26 @@ class FundFlowAnalyzer:
         """分析资金流向"""
         spot_symbols = self.get_all_usdt_symbols(is_futures=False)
         futures_symbols = self.get_all_usdt_symbols(is_futures=True)
-        spot_data = self.get_klines_parallel(spot_symbols, is_futures=False, max_workers=20)
-        futures_data = self.get_klines_parallel(futures_symbols, is_futures=True, max_workers=20)
+        spot_data = self.get_klines_parallel(spot_symbols, is_futures=False, max_workers=20, include_latest=True)
+        futures_data = self.get_klines_parallel(futures_symbols, is_futures=True, max_workers=20, include_latest=True)
         spot_df = pd.DataFrame(spot_data)
         futures_df = pd.DataFrame(futures_data)
         if spot_df.empty or 'net_inflow' not in spot_df.columns:
             logger.error("现货数据为空或缺少 'net_inflow' 列")
-            spot_df = pd.DataFrame(columns=['symbol', 'net_inflow', 'quote_volume'])
+            spot_df = pd.DataFrame(columns=['symbol', 'net_inflow', 'quote_volume', 'latest_price'])
         if futures_df.empty or 'net_inflow' not in futures_df.columns:
             logger.error("期货数据为空或缺少 'net_inflow' 列")
-            futures_df = pd.DataFrame(columns=['symbol', 'net_inflow', 'quote_volume'])
+            futures_df = pd.DataFrame(columns=['symbol', 'net_inflow', 'quote_volume', 'latest_price'])
         spot_inflow_top20 = spot_df.sort_values(by='net_inflow', ascending=False).head(20)
         futures_inflow_top20 = futures_df.sort_values(by='net_inflow', ascending=False).head(20)
         spot_outflow_top20 = spot_df.sort_values(by='net_inflow', ascending=True).head(20)
         futures_outflow_top20 = futures_df.sort_values(by='net_inflow', ascending=True).head(20)
         deepseek_data = {
-            "spot_inflow_top20": spot_inflow_top20[['symbol', 'net_inflow', 'quote_volume']].to_dict('records'),
-            "futures_inflow_top20": futures_inflow_top20[['symbol', 'net_inflow', 'quote_volume']].to_dict('records'),
-            "spot_outflow_top20": spot_outflow_top20[['symbol', 'net_inflow', 'quote_volume']].to_dict('records'),
-            "futures_outflow_top20": futures_outflow_top20[['symbol', 'net_inflow', 'quote_volume']].to_dict('records')
+            "spot_inflow_top20": spot_inflow_top20[['symbol', 'net_inflow', 'quote_volume', 'latest_price']].to_dict('records'),
+            "futures_inflow_top20": futures_inflow_top20[['symbol', 'net_inflow', 'quote_volume', 'latest_price']].to_dict('records'),
+            "spot_outflow_top20": spot_outflow_top20[['symbol', 'net_inflow', 'quote_volume', 'latest_price']].to_dict('records'),
+            "futures_outflow_top20": futures_outflow_top20[['symbol', 'net_inflow', 'quote_volume', 'latest_price']].to_dict('records'),
+            "timestamp": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
         }
         analysis = self.send_to_deepseek(deepseek_data)
         return {
