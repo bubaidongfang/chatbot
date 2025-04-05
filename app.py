@@ -28,7 +28,7 @@ st.set_page_config(
 )
 
 # API配置
-OPENAI_API_KEY = "sk-ZLUS9OzFCTnOdHh6rI4YDjhInMEdEAP8n5p3Ete1Ckkf0LZI"
+OPENAI_API_KEY = "xxx"
 BINANCE_API_URL = "https://api-gcp.binance.com"  # 更新为官方推荐的现货API端点
 BINANCE_FUTURES_URL = "https://fapi.binance.com"
 
