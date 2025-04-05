@@ -28,7 +28,7 @@ st.set_page_config(
 )
 
 # API配置
-OPENAI_API_KEY = "xxxxxxx"
+OPENAI_API_KEY = "sk-ZLUS9OzFCTnOdHh6rI4YDjhInMEdEAP8n5p3Ete1Ckkf0LZI"
 BINANCE_API_URL = "https://api-gcp.binance.com"  # 更新为官方推荐的现货API端点
 BINANCE_FUTURES_URL = "https://fapi.binance.com"
 
@@ -784,14 +784,18 @@ class FundFlowAnalyzer:
     def get_klines_parallel(self, symbols, is_futures=False, max_workers=20):
         """使用线程池并行获取多个交易对的K线数据（基于最近完成的 4H K线）"""
         results = []
+        failed_symbols = []
         def fetch_kline(symbol):
             try:
                 base_url = self.futures_base_url if is_futures else self.spot_base_url
                 endpoint = "/klines"
                 now = datetime.utcnow()
-                # 计算最近完成的 4H 时间段
-                hours_since_midnight = now.hour + now.minute / 60 + now.second / 3600
-                last_4h_start = now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=(hours_since_midnight % 4))
+                # 计算当前时间所在的 4H 周期起点
+                hours_since_day_start = now.hour + now.minute / 60 + now.second / 3600
+                last_4h_offset = int(hours_since_day_start // 4) * 4  # 对齐到最近的4H整点
+                last_4h_start = now.replace(minute=0, second=0, microsecond=0, hour=0) + timedelta(hours=last_4h_offset)
+                if last_4h_start > now:  # 如果超前，退回到上一个周期
+                    last_4h_start -= timedelta(hours=4)
                 end_time = int(last_4h_start.timestamp() * 1000)
                 start_time = int((last_4h_start - timedelta(hours=4)).timestamp() * 1000)
                 params = {
@@ -801,12 +805,14 @@ class FundFlowAnalyzer:
                     'endTime': end_time,
                     'limit': 2
                 }
+                logger.info(f"请求 {symbol}: start={datetime.fromtimestamp(start_time/1000)}, end={datetime.fromtimestamp(end_time/1000)}")
                 response = requests.get(f"{base_url}{endpoint}", params=params)
+                response.raise_for_status()  # 检查 HTTP 状态码
                 data = response.json()
                 if not data or len(data) < 2:
                     logger.error(f"数据不足 {symbol}: 返回 {len(data)} 根K线")
                     return None
-                k = data[1]  # 取倒数第二根已完成的 4H K线
+                k = data[-1]  # 取最后一根已完成的 4H K线
                 open_time = datetime.fromtimestamp(k[0] / 1000).strftime('%Y-%m-%d %H:%M:%S')
                 close_time = datetime.fromtimestamp(k[6] / 1000).strftime('%Y-%m-%d %H:%M:%S')
                 return {
@@ -830,9 +836,17 @@ class FundFlowAnalyzer:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(fetch_kline, symbol): symbol for symbol in symbols}
             for future in concurrent.futures.as_completed(futures):
+                symbol = futures[future]
                 result = future.result()
                 if result:
                     results.append(result)
+                else:
+                    failed_symbols.append(symbol)
+        if failed_symbols:
+            logger.warning(f"以下交易对数据获取失败: {failed_symbols}")
+        if not results:
+            logger.error("所有交易对数据获取失败")
+            return []
         return results
 
     def send_to_deepseek(self, data):
@@ -884,6 +898,12 @@ class FundFlowAnalyzer:
         futures_data = self.get_klines_parallel(futures_symbols, is_futures=True, max_workers=20)
         spot_df = pd.DataFrame(spot_data)
         futures_df = pd.DataFrame(futures_data)
+        if spot_df.empty or 'net_inflow' not in spot_df.columns:
+            logger.error("现货数据为空或缺少 'net_inflow' 列")
+            spot_df = pd.DataFrame(columns=['symbol', 'net_inflow', 'quote_volume'])
+        if futures_df.empty or 'net_inflow' not in futures_df.columns:
+            logger.error("期货数据为空或缺少 'net_inflow' 列")
+            futures_df = pd.DataFrame(columns=['symbol', 'net_inflow', 'quote_volume'])
         spot_inflow_top20 = spot_df.sort_values(by='net_inflow', ascending=False).head(20)
         futures_inflow_top20 = futures_df.sort_values(by='net_inflow', ascending=False).head(20)
         spot_outflow_top20 = spot_df.sort_values(by='net_inflow', ascending=True).head(20)
