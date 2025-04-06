@@ -38,10 +38,12 @@ streamlit run app.py
 
 后台运行：
 app.py
+
 nohup streamlit run app.py > streamlit.log 2>&1 &
 
 
 feilv.py
+
 nohup streamlit run feilv.py > feilv.log 2>&1 &
 
 
