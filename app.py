@@ -16,8 +16,6 @@ import os
 import schedule
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import timedelta
-
 
 # 设置页面配置
 st.set_page_config(
@@ -28,7 +26,7 @@ st.set_page_config(
 )
 
 # API配置
-OPENAI_API_KEY = "xxxxxxx"  # 更新为自己在tu-zi中的API
+OPENAI_API_KEY = "xxxxx"  # 更新为自己在tu-zi中的API
 BINANCE_API_URL = "https://api-gcp.binance.com"  # 更新为官方推荐的现货API端点
 BINANCE_FUTURES_URL = "https://fapi.binance.com"
 
@@ -80,11 +78,25 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# 费率监控常量
-UPDATE_INTERVAL = 10  # 数据更新间隔（秒）
-MAX_DATA_POINTS = 240  # 最大数据点数量 (4小时 = 240分钟)
-HOURS_TO_DISPLAY = 4  # 显示过去多少小时的数据
-STATS_FILE = "funding_rates_stats.json"  # 统计数据文件
+# 初始化会话状态（在全局作用域中定义，避免重复初始化）
+if 'current_analysis' not in st.session_state:
+    st.session_state.current_analysis = "市场行为分析"
+if 'symbol' not in st.session_state:
+    st.session_state.symbol = "BTCUSDT"
+if 'timestamps' not in st.session_state:
+    st.session_state.timestamps = []
+    st.session_state.spot_prices = []
+    st.session_state.futures_prices = []
+    st.session_state.premiums = []
+    st.session_state.funding_rates = []
+    st.session_state.open_interest = []
+    st.session_state.last_funding_rate = None
+    st.session_state.running = False
+    st.session_state.charts = [None, None, None]
+    st.session_state.historical_data_loaded = False
+    st.session_state.stats_data = None
+    st.session_state.last_stats_update = None
+
 class RateLimiter:
     """请求频率限制器"""
     def __init__(self, max_requests, time_window):
@@ -166,181 +178,6 @@ def get_binance_klines(symbol: str, interval: str, limit: int = 100) -> pd.DataF
         logger.error(f"处理K线数据时发生错误: {str(e)}")
         return pd.DataFrame()
 
-# 费率监控相关函数
-def get_spot_price(symbol):
-    """获取现货价格"""
-    try:
-        url = "https://api.binance.com/api/v3/ticker/price"
-        params = {"symbol": symbol}
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        data = response.json()
-        if "price" in data:
-            return float(data["price"])
-        else:
-            logger.error(f"无法获取现货价格: {data}")
-            return None
-    except Exception as e:
-        logger.error(f"获取现货价格时出错: {e}")
-        return None
-
-def get_futures_price(symbol):
-    """获取期货价格"""
-    try:
-        url = "https://fapi.binance.com/fapi/v1/ticker/price"
-        params = {"symbol": symbol}
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        data = response.json()
-        if "price" in data:
-            return float(data["price"])
-        else:
-            logger.error(f"无法获取期货价格: {data}")
-            return None
-    except Exception as e:
-        logger.error(f"获取期货价格时出错: {e}")
-        return None
-
-def get_funding_rate(symbol):
-    """获取资金费率"""
-    try:
-        url = "https://fapi.binance.com/fapi/v1/premiumIndex"
-        params = {"symbol": symbol}
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        data = response.json()
-        if "lastFundingRate" in data:
-            return float(data["lastFundingRate"])
-        else:
-            logger.error(f"无法获取资金费率: {data}")
-            return None
-    except Exception as e:
-        logger.error(f"获取资金费率时出错: {e}")
-        return None
-
-def get_open_interest(symbol):
-    """获取持仓量"""
-    try:
-        url = "https://fapi.binance.com/fapi/v1/openInterest"
-        params = {"symbol": symbol}
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        data = response.json()
-        if "openInterest" in data:
-            return float(data["openInterest"])
-        else:
-            logger.error(f"无法获取持仓量: {data}")
-            return None
-    except Exception as e:
-        logger.error(f"获取持仓量时出错: {e}")
-        return None
-
-def get_historical_klines(symbol, interval, limit):
-    """获取历史K线数据"""
-    try:
-        end_time = int(datetime.now(timezone.utc).timestamp() * 1000)
-        start_time = int((datetime.now(timezone.utc) - timedelta(hours=HOURS_TO_DISPLAY)).timestamp() * 1000)
-
-        spot_url = "https://api.binance.com/api/v3/klines"
-        spot_params = {
-            "symbol": symbol,
-            "interval": interval,
-            "startTime": start_time,
-            "endTime": end_time,
-            "limit": limit
-        }
-        spot_response = requests.get(spot_url, params=spot_params)
-        spot_response.raise_for_status()
-        spot_data = spot_response.json()
-
-        futures_url = "https://fapi.binance.com/fapi/v1/klines"
-        futures_params = {
-            "symbol": symbol,
-            "interval": interval,
-            "startTime": start_time,
-            "endTime": end_time,
-            "limit": limit
-        }
-        futures_response = requests.get(futures_url, params=futures_params)
-        futures_response.raise_for_status()
-        futures_data = futures_response.json()
-
-        historical_timestamps = []
-        historical_spot_prices = []
-        historical_futures_prices = []
-        historical_premiums = []
-
-        min_length = min(len(spot_data), len(futures_data))
-        for i in range(min_length):
-            timestamp = datetime.fromtimestamp(spot_data[i][0] / 1000, tz=timezone.utc)
-            spot_close = float(spot_data[i][4])
-            futures_close = float(futures_data[i][4])
-            premium = (futures_close - spot_close) / spot_close * 100
-
-            historical_timestamps.append(timestamp)
-            historical_spot_prices.append(spot_close)
-            historical_futures_prices.append(futures_close)
-            historical_premiums.append(premium)
-
-        return historical_timestamps, historical_spot_prices, historical_futures_prices, historical_premiums
-    except Exception as e:
-        logger.error(f"获取历史K线数据时出错: {e}")
-        return [], [], [], []
-
-def get_historical_funding_rates(symbol, limit=MAX_DATA_POINTS):
-    """获取历史资金费率数据"""
-    try:
-        end_time = int(datetime.now(timezone.utc).timestamp() * 1000)
-        start_time = int((datetime.now(timezone.utc) - timedelta(hours=HOURS_TO_DISPLAY)).timestamp() * 1000)
-
-        url = "https://fapi.binance.com/fapi/v1/fundingRate"
-        params = {
-            "symbol": symbol,
-            "startTime": start_time,
-            "endTime": end_time,
-            "limit": limit
-        }
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        data = response.json()
-
-        timestamps = []
-        funding_rates = []
-        for item in data:
-            timestamps.append(datetime.fromtimestamp(item["fundingTime"] / 1000, tz=timezone.utc))
-            funding_rates.append(float(item["fundingRate"]) * 100)
-        return timestamps, funding_rates
-    except Exception as e:
-        logger.error(f"获取历史资金费率数据时出错: {e}")
-        return [], []
-
-def get_historical_open_interest(symbol, period="5m", limit=MAX_DATA_POINTS):
-    """获取历史持仓量数据"""
-    try:
-        end_time = int(datetime.now(timezone.utc).timestamp() * 1000)
-        start_time = int((datetime.now(timezone.utc) - timedelta(hours=HOURS_TO_DISPLAY)).timestamp() * 1000)
-
-        url = "https://fapi.binance.com/futures/data/openInterestHist"
-        params = {
-            "symbol": symbol,
-            "period": period,
-            "startTime": start_time,
-            "endTime": end_time,
-            "limit": limit
-        }
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        data = response.json()
-
-        timestamps = []
-        open_interests = []
-        for item in data:
-            timestamps.append(datetime.fromtimestamp(item["timestamp"] / 1000, tz=timezone.utc))
-            open_interests.append(float(item["sumOpenInterest"]))
-        return timestamps, open_interests
-    except Exception as e:
-        logger.error(f"获取历史持仓量数据时出错: {e}")
-        return [], []
 class BinanceFuturesAnalyzer:
     """币安期货分析器"""
     def __init__(self):
@@ -540,99 +377,6 @@ class BinanceFuturesAnalyzer:
             logger.error(f"生成持仓分析报告失败: {e}")
             return "AI分析生成失败，请稍后重试"
 
-class BinanceFundingRateTracker:
-    """币安资金费率跟踪器"""
-    def __init__(self, data_file="funding_rates_stats.json"):
-        self.data_file = data_file
-        self.previous_rates = {}
-        self.current_rates = {}
-
-        if os.path.exists(self.data_file):
-            try:
-                with open(self.data_file, 'r') as f:
-                    data = json.load(f)
-                    if 'previous_rates' in data:
-                        self.previous_rates = data['previous_rates']
-            except Exception as e:
-                logger.error(f"加载历史费率数据失败: {e}")
-
-    def get_usdt_perpetual_symbols(self) -> List[str]:
-        """获取所有USDT结尾的永续合约交易对"""
-        try:
-            response = requests.get("https://fapi.binance.com/fapi/v1/exchangeInfo")
-            data = response.json()
-            usdt_symbols = [symbol_info['symbol'] for symbol_info in data['symbols']
-                            if symbol_info['symbol'].endswith('USDT') and 
-                               symbol_info['status'] == 'TRADING' and 
-                               symbol_info['contractType'] == 'PERPETUAL']
-            return usdt_symbols
-        except Exception as e:
-            logger.error(f"获取永续合约交易对失败: {e}")
-            return []
-
-    def get_funding_rates(self) -> Dict[str, float]:
-        """获取所有USDT交易对的资金费率"""
-        try:
-            response = requests.get("https://fapi.binance.com/fapi/v1/premiumIndex")
-            data = response.json()
-            funding_rates = {item['symbol']: float(item['lastFundingRate'])
-                            for item in data if item['symbol'].endswith('USDT')}
-            return funding_rates
-        except Exception as e:
-            logger.error(f"获取资金费率失败: {e}")
-            return {}
-
-    def get_top_n(self, rates: Dict[str, float], n: int, reverse: bool = True) -> List[Tuple[str, float]]:
-        """获取费率最高/最低的n个交易对"""
-        sorted_rates = sorted(rates.items(), key=lambda x: x[1], reverse=reverse)
-        return sorted_rates[:n]
-
-    def get_biggest_changes(self, current: Dict[str, float], previous: Dict[str, float], n: int,
-                            increasing: bool = True) -> List[Tuple[str, float]]:
-        """获取费率变化最大的n个交易对"""
-        changes = {}
-        for symbol, rate in current.items():
-            if symbol in previous:
-                change = rate - previous[symbol]
-                if (increasing and change > 0) or (not increasing and change < 0):
-                    changes[symbol] = change
-        sorted_changes = sorted(changes.items(), key=lambda x: x[1], reverse=increasing)
-        return sorted_changes[:n]
-
-    def run_task(self):
-        """执行资金费率统计任务"""
-        logger.info(f"运行费率统计任务于 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        self.current_rates = self.get_funding_rates()
-        if not self.current_rates:
-            logger.error("无法获取资金费率，跳过本次运行")
-            return
-
-        highest_rates = self.get_top_n(self.current_rates, 5, reverse=True)
-        lowest_rates = self.get_top_n(self.current_rates, 5, reverse=False)
-        increasing_rates = decreasing_rates = []
-
-        if self.previous_rates:
-            increasing_rates = self.get_biggest_changes(self.current_rates, self.previous_rates, 5, increasing=True)
-            decreasing_rates = self.get_biggest_changes(self.current_rates, self.previous_rates, 5, increasing=False)
-
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        stats = {
-            "timestamp": timestamp,
-            "highest_rates": [{"symbol": s, "rate": r} for s, r in highest_rates],
-            "lowest_rates": [{"symbol": s, "rate": r} for s, r in lowest_rates],
-            "biggest_increases": [{"symbol": s, "change": c} for s, c in increasing_rates],
-            "biggest_decreases": [{"symbol": s, "change": c} for s, c in decreasing_rates],
-            "previous_rates": self.current_rates
-        }
-
-        try:
-            with open(self.data_file, 'w') as f:
-                json.dump(stats, f, indent=4)
-            logger.info(f"费率数据已保存至 {self.data_file}")
-        except Exception as e:
-            logger.error(f"保存费率数据失败: {e}")
-
-        self.previous_rates = self.current_rates.copy()
 def multi_timeframe_analysis(symbol: str) -> dict:
     """多周期分析功能"""
     results = {}
@@ -936,248 +680,6 @@ class FundFlowAnalyzer:
             "analysis": analysis
         }
 
-# 费率监控相关函数
-def update_data(symbol):
-    """更新费率监控数据"""
-    now = datetime.now(timezone.utc)
-    spot_price = get_spot_price(symbol)
-    futures_price = get_futures_price(symbol)
-    funding_rate = get_funding_rate(symbol)
-    open_interest = get_open_interest(symbol)
-
-    if spot_price is not None and futures_price is not None:
-        premium = (futures_price - spot_price) / spot_price * 100
-        st.session_state.timestamps.append(now)
-        st.session_state.spot_prices.append(spot_price)
-        st.session_state.futures_prices.append(futures_price)
-        st.session_state.premiums.append(premium)
-
-        if funding_rate is not None:
-            st.session_state.funding_rates.append(funding_rate * 100)
-            st.session_state.last_funding_rate = funding_rate
-        elif st.session_state.funding_rates:
-            st.session_state.funding_rates.append(st.session_state.funding_rates[-1])
-        else:
-            st.session_state.funding_rates.append(0)
-
-        if open_interest is not None:
-            st.session_state.open_interest.append(open_interest)
-        elif st.session_state.open_interest:
-            st.session_state.open_interest.append(st.session_state.open_interest[-1])
-        else:
-            st.session_state.open_interest.append(0)
-
-        if len(st.session_state.timestamps) > 1:
-            cutoff_time = now - timedelta(hours=HOURS_TO_DISPLAY)
-            if st.session_state.timestamps[0] < cutoff_time:
-                valid_indices = [i for i, ts in enumerate(st.session_state.timestamps) if ts >= cutoff_time]
-                if valid_indices:
-                    start_idx = valid_indices[0]
-                    st.session_state.timestamps = st.session_state.timestamps[start_idx:]
-                    st.session_state.spot_prices = st.session_state.spot_prices[start_idx:]
-                    st.session_state.futures_prices = st.session_state.futures_prices[start_idx:]
-                    st.session_state.premiums = st.session_state.premiums[start_idx:]
-                    st.session_state.funding_rates = st.session_state.funding_rates[start_idx:]
-                    st.session_state.open_interest = st.session_state.open_interest[start_idx:]
-
-        return spot_price, futures_price, premium, funding_rate, open_interest
-    return None, None, None, funding_rate, open_interest
-
-def create_premium_chart():
-    """创建溢价率图表（中国时区 CST）"""
-    if not st.session_state.timestamps:
-        return None
-    # 将 UTC 时间转换为 CST (UTC+8)
-    cst_timestamps = [ts + timedelta(hours=8) for ts in st.session_state.timestamps]
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=cst_timestamps, y=st.session_state.premiums, mode='lines',
-                             name='期现溢价率 (%)', line=dict(color='green')))
-    fig.update_layout(
-        height=300,
-        title_text=f"{st.session_state.symbol} 期现溢价率 (%) (CST)",
-        margin=dict(l=40, r=40, t=50, b=30),
-        xaxis_title="时间 (CST)",
-        yaxis_title="期现溢价率 (%)",
-        xaxis=dict(range=[datetime.now(timezone.utc) - timedelta(hours=HOURS_TO_DISPLAY - 8), 
-                         datetime.now(timezone.utc) + timedelta(hours=8)])
-    )
-    fig.add_hline(y=0, line_dash="dot", line_color="gray")
-    return fig
-
-def create_funding_rate_chart():
-    """创建资金费率图表（中国时区 CST）"""
-    if not st.session_state.timestamps:
-        return None
-    # 将 UTC 时间转换为 CST (UTC+8)
-    cst_timestamps = [ts + timedelta(hours=8) for ts in st.session_state.timestamps]
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=cst_timestamps, y=st.session_state.funding_rates, mode='lines',
-                             name='资金费率 (%)', line=dict(color='red')))
-    fig.update_layout(
-        height=300,
-        title_text=f"{st.session_state.symbol} 资金费率 (%) (CST)",
-        margin=dict(l=40, r=40, t=50, b=30),
-        xaxis_title="时间 (CST)",
-        yaxis_title="资金费率 (%)",
-        xaxis=dict(range=[datetime.now(timezone.utc) - timedelta(hours=HOURS_TO_DISPLAY - 8), 
-                         datetime.now(timezone.utc) + timedelta(hours=8)])
-    )
-    fig.add_hline(y=0, line_dash="dot", line_color="gray")
-    return fig
-
-def create_open_interest_chart():
-    """创建持仓量图表（中国时区 CST）"""
-    if not st.session_state.timestamps:
-        return None
-    # 将 UTC 时间转换为 CST (UTC+8)
-    cst_timestamps = [ts + timedelta(hours=8) for ts in st.session_state.timestamps]
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=cst_timestamps, y=st.session_state.open_interest, mode='lines',
-                             name='持仓量', line=dict(color='blue')))
-    fig.update_layout(
-        height=300,
-        title_text=f"{st.session_state.symbol} 持仓量 (CST)",
-        margin=dict(l=40, r=40, t=50, b=30),
-        xaxis_title="时间 (CST)",
-        yaxis_title="持仓量",
-        xaxis=dict(range=[datetime.now(timezone.utc) - timedelta(hours=HOURS_TO_DISPLAY - 8), 
-                         datetime.now(timezone.utc) + timedelta(hours=8)])
-    )
-    return fig
-def load_stats_data():
-    """读取资金费率统计数据"""
-    try:
-        if os.path.exists(STATS_FILE):
-            with open(STATS_FILE, 'r') as f:
-                data = json.load(f)
-                st.session_state.stats_data = data
-                st.session_state.last_stats_update = datetime.now()
-                return data
-        return None
-    except Exception as e:
-        logger.error(f"读取统计数据出错: {e}")
-        return None
-
-def load_historical_data(symbol):
-    """加载费率监控历史数据"""
-    if not st.session_state.historical_data_loaded:
-        with st.spinner("正在加载历史数据..."):
-            timestamps, spot_prices, futures_prices, premiums = get_historical_klines(symbol, "1m", MAX_DATA_POINTS)
-            funding_timestamps, funding_rates = get_historical_funding_rates(symbol)
-            oi_timestamps, open_interests = get_historical_open_interest(symbol)
-
-            if timestamps:
-                st.session_state.timestamps = timestamps
-                st.session_state.spot_prices = spot_prices
-                st.session_state.futures_prices = futures_prices
-                st.session_state.premiums = premiums
-
-                if funding_rates:
-                    mapped_funding_rates = []
-                    for ts in timestamps:
-                        closest_idx = min(range(len(funding_timestamps)), 
-                                        key=lambda i: abs((ts - funding_timestamps[i]).total_seconds()))
-                        mapped_funding_rates.append(funding_rates[closest_idx] if closest_idx < len(funding_rates) else 0)
-                    st.session_state.funding_rates = mapped_funding_rates
-                else:
-                    st.session_state.funding_rates = [0] * len(timestamps)
-
-                if open_interests:
-                    mapped_open_interests = []
-                    for ts in timestamps:
-                        closest_idx = min(range(len(oi_timestamps)), 
-                                        key=lambda i: abs((ts - oi_timestamps[i]).total_seconds()))
-                        mapped_open_interests.append(open_interests[closest_idx] if closest_idx < len(open_interests) else 0)
-                    st.session_state.open_interest = mapped_open_interests
-                else:
-                    st.session_state.open_interest = [0] * len(timestamps)
-
-                funding_rate = get_funding_rate(symbol)
-                open_interest = get_open_interest(symbol)
-                if funding_rate is not None:
-                    st.session_state.last_funding_rate = funding_rate
-                    if st.session_state.funding_rates:
-                        st.session_state.funding_rates[-1] = funding_rate * 100
-                if open_interest is not None and st.session_state.open_interest:
-                    st.session_state.open_interest[-1] = open_interest
-
-                st.session_state.historical_data_loaded = True
-                return True
-            return False
-    return True
-
-def display_stats_data():
-    """显示资金费率统计数据"""
-    if (st.session_state.last_stats_update is None or
-            (datetime.now() - st.session_state.last_stats_update).total_seconds() > 60):
-        load_stats_data()
-
-    container = st.container()
-    with container:
-        if st.session_state.stats_data:
-            data = st.session_state.stats_data
-            timestamp = data.get("timestamp", "未知")
-            col1, col2, col3, col4 = st.columns(4)
-
-            with col1:
-                st.subheader("费率最高的交易对")
-                if "highest_rates" in data and data["highest_rates"]:
-                    df_highest = pd.DataFrame([{"交易对": item.get("symbol", ""), "费率": f"{item.get('rate', 0) * 100:.2f}%"}
-                                              for item in data["highest_rates"]])
-                    st.dataframe(df_highest, hide_index=True)
-                else:
-                    st.write("暂无数据")
-
-            with col2:
-                st.subheader("费率最低的交易对")
-                if "lowest_rates" in data and data["lowest_rates"]:
-                    df_lowest = pd.DataFrame([{"交易对": item.get("symbol", ""), "费率": f"{item.get('rate', 0) * 100:.2f}%"}
-                                             for item in data["lowest_rates"]])
-                    st.dataframe(df_lowest, hide_index=True)
-                else:
-                    st.write("暂无数据")
-
-            with col3:
-                st.subheader("费率上升最快")
-                if "biggest_increases" in data and data["biggest_increases"]:
-                    df_increases = pd.DataFrame([{"交易对": item.get("symbol", ""), "变化": f"{item.get('change', 0) * 100:.4f}%"}
-                                                for item in data["biggest_increases"]])
-                    st.dataframe(df_increases, hide_index=True)
-                else:
-                    st.write("暂无数据")
-
-            with col4:
-                st.subheader("费率下降最快")
-                if "biggest_decreases" in data and data["biggest_decreases"]:
-                    df_decreases = pd.DataFrame([{"交易对": item.get("symbol", ""), "变化": f"{item.get('change', 0) * 100:.4f}%"}
-                                                for item in data["biggest_decreases"]])
-                    st.dataframe(df_decreases, hide_index=True)
-                else:
-                    st.write("暂无数据")
-
-            st.caption(f"更新时间: {timestamp}")
-        else:
-            st.error("未能加载数据，请检查API连接")
-    return container
-
-# 初始化会话状态（在全局作用域中定义，避免重复初始化）
-if 'current_analysis' not in st.session_state:
-    st.session_state.current_analysis = "市场行为分析"
-if 'symbol' not in st.session_state:
-    st.session_state.symbol = "BTCUSDT"
-if 'timestamps' not in st.session_state:
-    st.session_state.timestamps = []
-    st.session_state.spot_prices = []
-    st.session_state.futures_prices = []
-    st.session_state.premiums = []
-    st.session_state.funding_rates = []
-    st.session_state.open_interest = []
-    st.session_state.last_funding_rate = None
-    st.session_state.running = False
-    st.session_state.charts = [None, None, None]
-    st.session_state.historical_data_loaded = False
-    st.session_state.stats_data = None
-    st.session_state.last_stats_update = None
 def main():
     st.title("分析系统")
     st.sidebar.header("功能导航")
@@ -1199,10 +701,6 @@ def main():
                          type="primary" if st.session_state.current_analysis == "资金流向分析" else "secondary",
                          use_container_width=True):
         st.session_state.current_analysis = "资金流向分析"
-    if st.sidebar.button("费率监控",
-                         type="primary" if st.session_state.current_analysis == "费率监控" else "secondary",
-                         use_container_width=True):
-        st.session_state.current_analysis = "费率监控"
 
     # 市场行为分析
     if st.session_state.current_analysis == "市场行为分析":
@@ -1292,126 +790,6 @@ def main():
                 st.subheader("DeepSeek分析结果")
                 st.markdown(analysis_result["analysis"])
 
-    # 费率监控
-    elif st.session_state.current_analysis == "费率监控":
-        st.header("加密货币期现溢价监控")
-        
-        # 侧边栏控件
-        with st.sidebar:
-            st.title("监控设置")
-            new_symbol = st.text_input("输入交易对", value=st.session_state.symbol, placeholder="例如: BTCUSDT, ETHUSDT")
-            if new_symbol != st.session_state.symbol:
-                st.session_state.symbol = new_symbol
-                st.session_state.timestamps = []
-                st.session_state.spot_prices = []
-                st.session_state.futures_prices = []
-                st.session_state.premiums = []
-                st.session_state.funding_rates = []
-                st.session_state.open_interest = []
-                st.session_state.last_funding_rate = None
-                st.session_state.historical_data_loaded = False
-                st.session_state.charts = [None, None, None]
-                if st.session_state.running:
-                    st.session_state.running = False
-                st.experimental_rerun()
-
-            col1, col2 = st.columns(2)
-            with col1:
-                start_stop = st.button('开始监控' if not st.session_state.running else '停止监控', use_container_width=True)
-                if start_stop:
-                    st.session_state.running = not st.session_state.running
-                    if st.session_state.running:
-                        success = load_historical_data(st.session_state.symbol)
-                        if not success:
-                            st.error("无法加载历史数据，请检查交易对是否正确")
-                            st.session_state.running = False
-                        st.experimental_rerun()
-            with col2:
-                if st.button('清除数据', use_container_width=True):
-                    st.session_state.timestamps = []
-                    st.session_state.spot_prices = []
-                    st.session_state.futures_prices = []
-                    st.session_state.premiums = []
-                    st.session_state.funding_rates = []
-                    st.session_state.open_interest = []
-                    st.session_state.last_funding_rate = None
-                    st.session_state.historical_data_loaded = False
-                    st.session_state.charts = [None, None, None]
-                    st.experimental_rerun()
-
-        # 显示统计数据
-        stats_placeholder = st.empty()
-        with stats_placeholder:
-            display_stats_data()
-
-        # 显示最新数据
-        metrics_placeholder = st.empty()
-
-        # 图表布局
-        chart_col1, chart_col2, chart_col3 = st.columns(3)
-
-        if st.session_state.running:
-            progress_placeholder = st.empty()
-            if not st.session_state.historical_data_loaded:
-                success = load_historical_data(st.session_state.symbol)
-                if not success:
-                    st.error("无法加载历史数据，请检查交易对是否正确")
-                    st.session_state.running = False
-                    st.experimental_rerun()
-
-            if st.session_state.charts[0] is None:
-                with chart_col1:
-                    st.session_state.charts[0] = st.empty()
-            if st.session_state.charts[1] is None:
-                with chart_col2:
-                    st.session_state.charts[1] = st.empty()
-            if st.session_state.charts[2] is None:
-                with chart_col3:
-                    st.session_state.charts[2] = st.empty()
-
-            last_stats_refresh = time.time()
-            while st.session_state.running:
-                spot_price, futures_price, premium, funding_rate, open_interest = update_data(st.session_state.symbol)
-                current_time = time.time()
-                if current_time - last_stats_refresh > 60:
-                    with stats_placeholder:
-                        display_stats_data()
-                    last_stats_refresh = current_time
-
-                if spot_price is not None and futures_price is not None:
-                    # 使用 CST 时间显示当前数据
-                    china_time = datetime.now(timezone.utc) + timedelta(hours=8)
-                    current_time_cst = china_time.strftime("%Y-%m-%d %H:%M:%S CST")
-                    metrics_placeholder.markdown(f"""
-                    ### 当前数据 - {st.session_state.symbol} ({current_time_cst})
-                    | 现货价格 | 期货价格 | 期现溢价 | 资金费率 | 持仓量 |
-                    | --- | --- | --- | --- | --- |
-                    | {spot_price:.6f} | {futures_price:.6f} | {premium:.4f}% | {funding_rate * 100:.6f}% | {open_interest:.2f} |
-                    """)
-
-                premium_fig = create_premium_chart()
-                funding_fig = create_funding_rate_chart()
-                open_interest_fig = create_open_interest_chart()
-                if premium_fig and st.session_state.charts[0]:
-                    st.session_state.charts[0].plotly_chart(premium_fig, use_container_width=True)
-                if funding_fig and st.session_state.charts[1]:
-                    st.session_state.charts[1].plotly_chart(funding_fig, use_container_width=True)
-                if open_interest_fig and st.session_state.charts[2]:
-                    st.session_state.charts[2].plotly_chart(open_interest_fig, use_container_width=True)
-
-                for i in range(UPDATE_INTERVAL, 0, -1):
-                    progress_placeholder.progress(1 - i / UPDATE_INTERVAL, text=f"下次更新倒计时: {i}秒")
-                    time.sleep(1)
-
+# 运行主程序
 if __name__ == "__main__":
-    # 启动资金费率跟踪器（后台任务）
-    tracker = BinanceFundingRateTracker()
-    schedule.every(5).minutes.do(tracker.run_task)
-    def run_scheduler():
-        while True:
-            schedule.run_pending()
-            time.sleep(10)
-    threading.Thread(target=run_scheduler, daemon=True).start()
-    
-    # 运行主程序
     main()
