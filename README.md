@@ -25,11 +25,46 @@ https://api.tu-zi.com/topup
 在代码中仅修改OPENAI_API_KEY = "xxxx" #更新为自己的APIKey这里即可开始运行使用。默认使用grok-3-reasoner模型，需要其他请在代码中修改替换
 
 4.运行需要使用命令行：
-
+app.py包含4个AI分析系统包含：
+市场行为分析
+持仓分析
+多周期分析
+资金流向分析
 streamlit run app.py
 
+feilv.py仅是费率监控程序，需要单独再运行
+streamlit run app.py
+
+
 后台运行：
+app.py
 nohup streamlit run app.py > streamlit.log 2>&1 &
+
+
+feilv.py
+nohup streamlit run feilv.py > feilv.log 2>&1 &
+
+
+停止后台进程
+如果需要停止服务，可以找到进程 ID 并杀掉。
+查找进程
+
+ps -ef | grep -E "streamlit|python"
+
+输出示例：
+
+root  12345  ...  streamlit run feilv.py -- --mode frontend
+root  12346  ...  python feilv.py --mode backend
+
+杀死进程
+bash
+
+kill -9 12345  # 停止前端
+kill -9 12346  # 停止后端
+
+
+
+
 
 访问http://xxx:8501/
 正常可开始使用
