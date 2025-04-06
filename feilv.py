@@ -397,13 +397,13 @@ def run_streamlit():
             st.session_state.symbol1_data = {"timestamps": [], "spot_prices": [], "futures_prices": [], "premiums": [], 
                                              "funding_rates": [], "open_interest": [], "last_funding_rate": None, 
                                              "historical_data_loaded": False, "charts": [None, None, None], "running": False}
-            st.experimental_rerun()
+            st.experimental_rerun()  # 替换为 experimental_rerun
         if new_symbol2 != st.session_state.symbol2:
             st.session_state.symbol2 = new_symbol2
             st.session_state.symbol2_data = {"timestamps": [], "spot_prices": [], "futures_prices": [], "premiums": [], 
                                              "funding_rates": [], "open_interest": [], "last_funding_rate": None, 
                                              "historical_data_loaded": False, "charts": [None, None, None], "running": False}
-            st.experimental_rerun()
+            st.experimental_rerun()  # 替换为 experimental_rerun
         
         col1, col2 = st.columns(2)
         with col1:
@@ -414,7 +414,7 @@ def run_streamlit():
                     if not success:
                         st.error(f"无法加载 {st.session_state.symbol1} 历史数据")
                         st.session_state.symbol1_data["running"] = False
-                st.experimental_rerun()
+                st.experimental_rerun()  # 替换为 experimental_rerun
         with col2:
             if st.button('2️⃣停止监控' if st.session_state.symbol2_data["running"] else '2️⃣开始监控', key="toggle_symbol2"):
                 st.session_state.symbol2_data["running"] = not st.session_state.symbol2_data["running"]
@@ -423,7 +423,7 @@ def run_streamlit():
                     if not success:
                         st.error(f"无法加载 {st.session_state.symbol2} 历史数据")
                         st.session_state.symbol2_data["running"] = False
-                st.experimental_rerun()
+                st.experimental_rerun()  # 替换为 experimental_rerun
         
         st.markdown("---")
         st.subheader("📊 统计数据")
@@ -536,7 +536,7 @@ def run_streamlit():
                 if not success:
                     st.error(f"无法加载 {st.session_state.symbol1} 历史数据")
                     st.session_state.symbol1_data["running"] = False
-                    st.experimental_rerun()
+                    st.experimental_rerun()  # 替换为 experimental_rerun
             spot_price1, futures_price1, premium1, funding_rate1, open_interest1 = update_data(st.session_state.symbol1, st.session_state.symbol1_data)
             if spot_price1 is not None and futures_price1 is not None:
                 title_placeholder1.markdown(f"### 1️⃣ {st.session_state.symbol1} 当前数据 - ({current_time_str})")
@@ -563,7 +563,7 @@ def run_streamlit():
                 if not success:
                     st.error(f"无法加载 {st.session_state.symbol2} 历史数据")
                     st.session_state.symbol2_data["running"] = False
-                    st.experimental_rerun()
+                    st.experimental_rerun()  # 替换为 experimental_rerun
             spot_price2, futures_price2, premium2, funding_rate2, open_interest2 = update_data(st.session_state.symbol2, st.session_state.symbol2_data)
             if spot_price2 is not None and futures_price2 is not None:
                 title_placeholder2.markdown(f"### 2️⃣ {st.session_state.symbol2} 当前数据 - ({current_time_str})")
