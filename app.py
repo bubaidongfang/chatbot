@@ -26,7 +26,7 @@ st.set_page_config(
 )
 
 # API配置
-OPENAI_API_KEY = "xxxx"  # 更新为自己在tu-zi中的API
+OPENAI_API_KEY = "xxx"  # 更新为自己在tu-zi中的API
 BINANCE_API_URL = "https://api-gcp.binance.com"  # 更新为官方推荐的现货API端点
 BINANCE_FUTURES_URL = "https://fapi.binance.com"
 
@@ -332,7 +332,7 @@ class BinanceFuturesAnalyzer:
             response = client.chat.completions.create(
                 model="deepseek-reasoner",
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=1000,
+                max_tokens=4000,
                 temperature=0.7
             )
             return response.choices[0].message.content
@@ -366,14 +366,13 @@ class BinanceFuturesAnalyzer:
             response = client.chat.completions.create(
                 model="deepseek-reasoner",
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=1000,
+                max_tokens=4000,
                 temperature=0.7
             )
             return response.choices[0].message.content
         except Exception as e:
             logger.error(f"生成持仓分析报告失败: {e}")
             return "AI分析生成失败，请稍后重试"
-
 
 def multi_timeframe_analysis(symbol: str) -> dict:
     """多周期分析功能"""
@@ -437,39 +436,89 @@ def multi_timeframe_analysis(symbol: str) -> dict:
 
     risk["level"] = "高" if len(risk["factors"]) >= 3 else "低" if len(risk["factors"]) <= 1 else "中等"
 
+    # 创建趋势表格数据
+    trend_table_data = []
+    for tf in ['5m', '15m', '1h', '4h', '1d']:
+        if tf in trends:
+            trend_table_data.append({
+                "周期": TIMEFRAMES[tf]['name'],
+                "趋势": trends[tf]['trend'],
+                "RSI": f"{trends[tf]['rsi']:.2f}",
+                "支撑位": f"{trends[tf]['support']:.2f}",
+                "阻力位": f"{trends[tf]['resistance']:.2f}",
+                "成交量": trends[tf]['volume_trend']
+            })
+
+    # 构建更结构化的提示
     prompt = (
-        f"基于以下多周期技术指标对{symbol}进行全面市场分析：\n\n"
-        f"**核心技术指标**\n"
-        f"- 当前价格：{current_price}\n"
+        f"请生成一份关于{symbol}的多周期技术分析报告，格式必须严格按照以下结构：\n\n"
+
+        f"## 市场结构\n"
+        f"当前市场呈现 **[主要特征描述]** 特征：\n"
+        f"- **短期动能**：[5分钟和15分钟周期分析]\n"
+        f"- **中期走势**：[1小时和4小时周期分析]\n"
+        f"- **长期趋势**：[日线周期分析]\n\n"
+        f"市场结构处于 **[结构定位]** 阶段，[额外市场特征描述]\n\n"
+
+        f"## 技术面分析\n"
+        f"### 关键指标交互验证\n"
+        f"1. **价格结构**：\n"
+        f"   - [支撑位分析]\n"
+        f"   - [阻力位分析]\n\n"
+        f"2. **动量指标**：\n"
+        f"   - [RSI分析]\n"
+        f"   - [其他动量指标分析]\n\n"
+        f"3. **量价配合**：\n"
+        f"   - [成交量与价格关系分析]\n"
+        f"   - [成交量趋势分析]\n\n"
+
+        f"## 操作建议\n"
+        f"### 短期策略（日内交易）\n"
+        f"**多头策略**：\n"
+        f"- 入场：[入场点位和条件]\n"
+        f"- 目标：[目标价位]\n"
+        f"- 止损：[止损价位]\n\n"
+        f"**空头策略**：\n"
+        f"- 触发条件：[触发条件]\n"
+        f"- 目标：[目标价位]\n"
+        f"- 止损：[止损价位]\n\n"
+    )
+
+    # 添加数据信息
+    data_info = (
+        f"基于以下数据进行分析：\n"
+        f"- 当前价格：{current_price:.2f}\n"
         f"- 短期趋势（5m/15m）：{short_term_trend}\n"
         f"- 中期趋势（1h/4h）：{medium_term_trend}\n"
         f"- RSI指标：{avg_rsi:.2f}\n"
-        f"- 关键价格水平：\n"
-        f"  - 支撑位：{trends['1h']['support']}\n"
-        f"  - 阻力位：{trends['1h']['resistance']}\n"
-        f"- 成交量趋势：{trends['1h']['volume_trend']}\n\n"
-        f"**风险评估**\n"
+        f"- 支撑位：{trends.get('1h', {}).get('support', 'N/A'):.2f}\n"
+        f"- 阻力位：{trends.get('1h', {}).get('resistance', 'N/A'):.2f}\n"
         f"- 风险等级：{risk['level']}\n"
-        f"- 风险因素：{', '.join(risk['factors']) if risk['factors'] else '无重大风险'}\n\n"
-
-        f"请提供专业的多周期分析报告，包括以下部分：\n"
-        f"1. **市场结构分析**：基于多周期分析框架评估当前市场阶段\n"
-        f"2. **技术指标综合解读**：分析价格趋势与支撑/阻力的相互作用\n"
-        f"3. **分层次操作建议**：提供短期和中期具体策略及关键价格点位\n\n"
-
-        f"请使用Markdown格式，结构为：[市场综述]→[技术面分析]→[操作建议]。"
-        f"语言简洁专业，突出可操作信号，避免冗余描述。"
-        f"关键指标用**粗体**标注，明确标示不同时间周期的信号一致性，使用表格增强可读性。"
+        f"- 风险因素：{', '.join(risk['factors']) if risk['factors'] else '无重大风险'}\n"
     )
 
     try:
         response = client.chat.completions.create(
             model="deepseek-reasoner",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            max_tokens=1000
+            messages=[
+                {"role": "system",
+                 "content": "你是一位专业的加密货币技术分析师，请严格按照指定格式生成分析报告，不要添加任何额外的章节或标题。"},
+                {"role": "user", "content": prompt + data_info}
+            ],
+            temperature=0.5,  # 降低温度以获得更一致的输出
+            max_tokens=4000
         )
         ai_analysis = response.choices[0].message.content
+
+        # 确保格式一致性
+        if not ai_analysis.startswith(f"# {symbol} 技术分析报告"):
+            ai_analysis = f"# {symbol} 技术分析报告\n\n" + ai_analysis
+
+        # 确保主要部分存在
+        required_sections = ["## 市场结构", "## 技术面分析", "## 操作建议"]
+        for section in required_sections:
+            if section not in ai_analysis:
+                ai_analysis = ai_analysis.replace(section.replace("##", "#"), section)
     except Exception as e:
         logger.error(f"生成多周期分析报告失败: {e}")
         ai_analysis = "AI分析生成失败，请稍后重试"
@@ -638,7 +687,7 @@ class FundFlowAnalyzer:
             response = client.chat.completions.create(
                 model="deepseek-reasoner",
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=1000,
+                max_tokens=4000,
                 temperature=0.7
             )
             return response.choices[0].message.content
