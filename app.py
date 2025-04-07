@@ -288,7 +288,7 @@ class BinanceFuturesAnalyzer:
         for period, hours in [('1h', 1), ('4h', 4), ('1d', 24)]:
             df = get_binance_klines(symbol, period, limit=2)
             if not df.empty:
-                price_change = ((float(df['close'].iloc[-1]) - float(df['open'].iloc[0])) 
+                price_change = ((float(df['close'].iloc[-1]) - float(df['open'].iloc[0]))
                               / float(df['open'].iloc[0])) * 100
                 price_data[f'{hours}h_change'] = price_change
 
@@ -299,39 +299,42 @@ class BinanceFuturesAnalyzer:
             low = float(daily_klines['low'].iloc[0])
             volatility = ((high - low) / low) * 100
 
-        prompt = f"""
-        作为一位专业的期货交易分析师，请基于以下{symbol}的数据进行深度市场行为分析：
-
-        当前市场状态：
-        - 当前持仓量：{position_data['current_oi']:,.0f}
-        - 持仓分位数：{position_data['percentile']:.2f}%（高位>80%，低位<20%）
-        - 24小时波动率：{volatility:.2f}%
-
-        价格与持仓量变化对比：
-        1小时周期：
-        - 价格变化：{price_data.get('1h_change', 0):.2f}%
-        - 持仓变化：{position_data['changes']['1小时']['change_percentage']:.2f}%
-        4小时周期：
-        - 价格变化：{price_data.get('4h_change', 0):.2f}%
-        - 持仓变化：{position_data['changes']['4小时']['change_percentage']:.2f}%
-        24小时周期：
-        - 价格变化：{price_data.get('24h_change', 0):.2f}%
-        - 持仓变化：{position_data['changes']['24小时']['change_percentage']:.2f}%
-
-        请提供以下分析（使用markdown格式）：
-        ## 市场行为分析
-        [基于价格与持仓量的变化关系分析]
-        ## 持仓水平研判
-        [分析当前持仓量水平]
-        ## 多空博弈分析
-        - 主导方向：
-        - 主要特征：
-        - 市场情绪：
-        ## 交易建议
-        - 操作思路：
-        - 关注重点：
-        - 风险提示：
-        """
+        prompt = (
+    f"### 分析数据\n"
+    f"基于{symbol}期货市场的以下关键数据进行专业市场行为分析：\n\n"
+    f"**市场状态指标**\n"
+    f"- 当前持仓量：{position_data['current_oi']:,.0f}\n"
+    f"- 持仓分位数：{position_data['percentile']:.2f}%（高位>80%，低位<20%）\n"
+    f"- 24小时波动率：{volatility:.2f}%\n\n"
+    f"**多周期价格与持仓对比**\n"
+    f"| 周期 | 价格变化 | 持仓变化 |\n"
+    f"|------|----------|----------|\n"
+    f"| 1小时 | {price_data.get('1h_change', 0):.2f}% | {position_data['changes']['1小时']['change_percentage']:.2f}% |\n"
+    f"| 4小时 | {price_data.get('4h_change', 0):.2f}% | {position_data['changes']['4小时']['change_percentage']:.2f}% |\n"
+    f"| 24小时 | {price_data.get('24h_change', 0):.2f}% | {position_data['changes']['24小时']['change_percentage']:.2f}% |\n\n"
+    
+    f"### 分析要求\n"
+    f"1. **市场行为模式识别**：\n"
+    f"   - 基于价格与持仓量变化关系，识别当前市场行为模式（积累、分配、突破、回调等）\n"
+    f"   - 量化价格-持仓相关性及其背离程度\n"
+    f"   - 评估当前持仓水平的历史位置及其含义\n"
+    f"2. **多空力量对比**：\n"
+    f"   - 确定当前主导方向（多头/空头/中性）及其强度（强/中/弱）\n"
+    f"   - 分析主要市场特征（如高抛低吸、趋势延续、区间震荡等）\n"
+    f"   - 评估市场情绪（恐慌/贪婪/中性）及其变化趋势\n"
+    f"3. **交易策略建议**：\n"
+    f"   - 提供具体的操作思路（如趋势跟随、逆势交易、区间突破等）\n"
+    f"   - 明确关键价格水平（如突破确认点、止损位、目标位）\n"
+    f"   - 提示潜在风险因素及规避方法\n\n"
+    
+    f"### 输出规范\n"
+    f"- 使用Markdown格式，结构为：[市场行为分析]→[持仓水平研判]→[多空博弈分析]→[交易建议]\n"
+    f"- 语言简洁专业，突出可操作信号，避免冗余描述\n"
+    f"- 数据呈现：\n"
+    f"  - 关键指标（如相关性、趋势强度）用**粗体**标注\n"
+    f"  - 明确标示操作建议的置信度\n"
+    f"  - 使用要点列表增强可读性\n"
+)
         try:
             response = client.chat.completions.create(
                 model="deepseek-reasoner",
@@ -350,21 +353,36 @@ class BinanceFuturesAnalyzer:
         top_increase = df.nlargest(10, 'change_percentage')
         top_decrease = df.nsmallest(10, 'change_percentage')
 
-        prompt = f"""作为一位专业的期货交易分析师，请基于以下持仓数据变化提供简洁的市场分析报告：
-        持仓增加最显著的前10个交易对：
-        {top_increase[['symbol', 'change_percentage']].to_string()}
-        持仓减少最显著的前10个交易对：
-        {top_decrease[['symbol', 'change_percentage']].to_string()}
-        请提供以下分析（使用markdown格式）：
-        ## 市场情绪分析
-        [分析整体市场情绪]
-        ## 主要变动解读
-        - 大额持仓变动分析
-        - 潜在市场方向
-        ## 交易建议
-        - 重点关注品种
-        - 风险提示
-        """
+        prompt = (
+    f"### 分析数据\n"
+    f"基于Binance期货市场USDT交易对的持仓量变化数据进行专业市场分析：\n\n"
+    f"**持仓增加最显著的前10个交易对**\n"
+    f"```\n{top_increase[['symbol', 'change_percentage']].to_string()}\n```\n\n"
+    f"**持仓减少最显著的前10个交易对**\n"
+    f"```\n{top_decrease[['symbol', 'change_percentage']].to_string()}\n```\n\n"
+    
+    f"### 分析要求\n"
+    f"1. **市场情绪分析**：\n"
+    f"   - 基于持仓变化评估整体市场情绪（看多/看空/中性）\n"
+    f"   - 量化情绪强度及其在历史范围内的位置\n"
+    f"   - 识别情绪极端区域及可能的反转信号\n"
+    f"2. **资金流向解读**：\n"
+    f"   - 分析主要资金流入/流出的币种类别（主流币/热门板块/小市值币等）\n"
+    f"   - 评估大额持仓变动背后的可能动机（如套利、对冲、投机等）\n"
+    f"   - 推断潜在市场方向及轮动逻辑\n"
+    f"3. **交易策略建议**：\n"
+    f"   - 提供重点关注币种及其选择理由\n"
+    f"   - 建议具体操作策略（如追踪资金流向、反向操作等）\n"
+    f"   - 明确风险提示及风险管理建议\n\n"
+    
+    f"### 输出规范\n"
+    f"- 使用Markdown格式，结构为：[市场情绪分析]→[资金流向解读]→[交易策略建议]\n"
+    f"- 语言简洁专业，突出可操作信号，避免冗余描述\n"
+    f"- 数据呈现：\n"
+    f"  - 关键指标（如流向强度、相关性）用**粗体**标注\n"
+    f"  - 使用表格对比不同币种类别的资金流向特征\n"
+    f"  - 明确标示策略建议的置信度\n"
+)
         try:
             response = client.chat.completions.create(
                 model="deepseek-reasoner",
@@ -439,32 +457,45 @@ def multi_timeframe_analysis(symbol: str) -> dict:
 
     risk["level"] = "高" if len(risk["factors"]) >= 3 else "低" if len(risk["factors"]) <= 1 else "中等"
 
-    prompt = f"""作为专业的加密货币分析师，请基于以下数据提供详细的市场分析报告：
-    技术指标数据：
-    - 当前价格：{current_price}
-    - 短期趋势：{short_term_trend}
-    - 中期趋势：{medium_term_trend}
-    - RSI指标：{avg_rsi:.2f}
-    - 支撑位：{trends['1h']['support']}
-    - 阻力位：{trends['1h']['resistance']}
-    - 成交量趋势：{trends['1h']['volume_trend']}
-    风险评估：
-    - 风险等级：{risk['level']}
-    - 风险因素：{', '.join(risk['factors']) if risk['factors'] else '无重大风险'}
-    请提供以下分析（使用markdown格式）：
-    ## 市场综述
-    [基于多周期分析框架的整体判断]
-    ## 技术面分析
-    - 趋势状态：
-    - 支撑阻力分析：
-    - 动量指标解读：
-    - 成交量分析：
-    ## 操作建议
-    - 短期策略：
-    - 中期布局：
-    - 风险提示：
-    请确保分析专业、客观，并注意风险提示。
-    """
+    prompt = (
+    f"### 分析数据\n"
+    f"基于以下多周期技术指标对{symbol}进行全面市场分析：\n\n"
+    f"**核心技术指标**\n"
+    f"- 当前价格：{current_price}\n"
+    f"- 短期趋势（5m/15m）：{short_term_trend}\n"
+    f"- 中期趋势（1h/4h）：{medium_term_trend}\n"
+    f"- RSI指标：{avg_rsi:.2f}\n"
+    f"- 关键价格水平：\n"
+    f"  - 支撑位：{trends['1h']['support']}\n"
+    f"  - 阻力位：{trends['1h']['resistance']}\n"
+    f"- 成交量趋势：{trends['1h']['volume_trend']}\n\n"
+    f"**风险评估**\n"
+    f"- 风险等级：{risk['level']}\n"
+    f"- 风险因素：{', '.join(risk['factors']) if risk['factors'] else '无重大风险'}\n\n"
+    
+    f"### 分析要求\n"
+    f"1. **市场结构分析**：\n"
+    f"   - 基于多周期分析框架评估当前市场阶段（累积、上升、分配、下降）\n"
+    f"   - 量化不同时间周期趋势的一致性及冲突程度\n"
+    f"   - 识别关键价格结构（如高点/低点序列、形态、通道等）\n"
+    f"2. **技术指标综合解读**：\n"
+    f"   - 分析价格趋势与支撑/阻力的相互作用\n"
+    f"   - 评估动量指标（如RSI）的背离/确认信号\n"
+    f"   - 解读成交量与价格关系及其市场含义\n"
+    f"3. **分层次操作建议**：\n"
+    f"   - 提供短期（日内至3天）具体策略及关键价格点位\n"
+    f"   - 建议中期（1-2周）布局思路及风险管理方案\n"
+    f"   - 明确风险因素及应对措施\n\n"
+    
+    f"### 输出规范\n"
+    f"- 使用Markdown格式，结构为：[市场综述]→[技术面分析]→[操作建议]\n"
+    f"- 语言简洁专业，突出可操作信号，避免冗余描述\n"
+    f"- 数据呈现：\n"
+    f"  - 关键指标（如趋势强度、背离程度）用**粗体**标注\n"
+    f"  - 明确标示不同时间周期的信号一致性\n"
+    f"  - 使用要点列表增强可读性\n"
+    f"  - 价格目标使用具体数值而非百分比\n"
+)
     try:
         response = client.chat.completions.create(
             model="deepseek-reasoner",
