@@ -26,7 +26,7 @@ st.set_page_config(
 )
 
 # API配置
-OPENAI_API_KEY = "xxxxx"  # 更新为自己在tu-zi中的API
+OPENAI_API_KEY = "xxxx"  # 更新为自己在tu-zi中的API
 BINANCE_API_URL = "https://api-gcp.binance.com"  # 更新为官方推荐的现货API端点
 BINANCE_FUTURES_URL = "https://fapi.binance.com"
 
@@ -97,8 +97,10 @@ if 'timestamps' not in st.session_state:
     st.session_state.stats_data = None
     st.session_state.last_stats_update = None
 
+
 class RateLimiter:
     """请求频率限制器"""
+
     def __init__(self, max_requests, time_window):
         self.max_requests = max_requests
         self.time_window = time_window
@@ -115,6 +117,7 @@ class RateLimiter:
                     time.sleep(sleep_time)
             self.requests.append(now)
 
+
 def fetch_data(url: str, params: dict = None, retries: int = 3) -> dict:
     """通用数据获取函数，带重试机制"""
     for attempt in range(retries):
@@ -130,6 +133,7 @@ def fetch_data(url: str, params: dict = None, retries: int = 3) -> dict:
                 logger.error(f"请求最终失败: {url}")
                 return None
 
+
 def calculate_rsi(prices: pd.Series, periods: int = 14) -> pd.Series:
     """计算RSI指标"""
     delta = prices.diff()
@@ -138,6 +142,7 @@ def calculate_rsi(prices: pd.Series, periods: int = 14) -> pd.Series:
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
+
 def calculate_support_resistance(df: pd.DataFrame, window: int = 20) -> tuple:
     """计算支撑和阻力位"""
     rolling_low = df['low'].rolling(window=window).min()
@@ -145,6 +150,7 @@ def calculate_support_resistance(df: pd.DataFrame, window: int = 20) -> tuple:
     support = rolling_low.iloc[-1]
     resistance = rolling_high.iloc[-1]
     return support, resistance
+
 
 def get_binance_klines(symbol: str, interval: str, limit: int = 100) -> pd.DataFrame:
     """获取币安K线数据"""
@@ -178,8 +184,10 @@ def get_binance_klines(symbol: str, interval: str, limit: int = 100) -> pd.DataF
         logger.error(f"处理K线数据时发生错误: {str(e)}")
         return pd.DataFrame()
 
+
 class BinanceFuturesAnalyzer:
     """币安期货分析器"""
+
     def __init__(self):
         self.base_url = "https://fapi.binance.com"
         self.headers = {
@@ -253,8 +261,8 @@ class BinanceFuturesAnalyzer:
             for period, hours in [('1小时', 1), ('4小时', 4), ('24小时', 24)]:
                 try:
                     past_oi = float(df[df['timestamp'] <=
-                                     df['timestamp'].max() - pd.Timedelta(hours=hours)]
-                                  ['sumOpenInterest'].iloc[-1])
+                                       df['timestamp'].max() - pd.Timedelta(hours=hours)]
+                                    ['sumOpenInterest'].iloc[-1])
                     change = current_oi - past_oi
                     change_percentage = (change / past_oi) * 100
                     changes[period] = {'change': change, 'change_percentage': change_percentage}
@@ -289,7 +297,7 @@ class BinanceFuturesAnalyzer:
             df = get_binance_klines(symbol, period, limit=2)
             if not df.empty:
                 price_change = ((float(df['close'].iloc[-1]) - float(df['open'].iloc[0]))
-                              / float(df['open'].iloc[0])) * 100
+                                / float(df['open'].iloc[0])) * 100
                 price_data[f'{hours}h_change'] = price_change
 
         daily_klines = get_binance_klines(symbol, '1d', limit=1)
@@ -300,47 +308,32 @@ class BinanceFuturesAnalyzer:
             volatility = ((high - low) / low) * 100
 
         prompt = (
-    f"### 分析数据\n"
-    f"基于{symbol}期货市场的以下关键数据进行专业市场行为分析：\n\n"
-    f"**市场状态指标**\n"
-    f"- 当前持仓量：{position_data['current_oi']:,.0f}\n"
-    f"- 持仓分位数：{position_data['percentile']:.2f}%（高位>80%，低位<20%）\n"
-    f"- 24小时波动率：{volatility:.2f}%\n\n"
-    f"**多周期价格与持仓对比**\n"
-    f"| 周期 | 价格变化 | 持仓变化 |\n"
-    f"|------|----------|----------|\n"
-    f"| 1小时 | {price_data.get('1h_change', 0):.2f}% | {position_data['changes']['1小时']['change_percentage']:.2f}% |\n"
-    f"| 4小时 | {price_data.get('4h_change', 0):.2f}% | {position_data['changes']['4小时']['change_percentage']:.2f}% |\n"
-    f"| 24小时 | {price_data.get('24h_change', 0):.2f}% | {position_data['changes']['24小时']['change_percentage']:.2f}% |\n\n"
-    
-    f"### 分析要求\n"
-    f"1. **市场行为模式识别**：\n"
-    f"   - 基于价格与持仓量变化关系，识别当前市场行为模式（积累、分配、突破、回调等）\n"
-    f"   - 量化价格-持仓相关性及其背离程度\n"
-    f"   - 评估当前持仓水平的历史位置及其含义\n"
-    f"2. **多空力量对比**：\n"
-    f"   - 确定当前主导方向（多头/空头/中性）及其强度（强/中/弱）\n"
-    f"   - 分析主要市场特征（如高抛低吸、趋势延续、区间震荡等）\n"
-    f"   - 评估市场情绪（恐慌/贪婪/中性）及其变化趋势\n"
-    f"3. **交易策略建议**：\n"
-    f"   - 提供具体的操作思路（如趋势跟随、逆势交易、区间突破等）\n"
-    f"   - 明确关键价格水平（如突破确认点、止损位、目标位）\n"
-    f"   - 提示潜在风险因素及规避方法\n\n"
-    
-    f"### 输出规范\n"
-    f"- 使用Markdown格式，结构为：[市场行为分析]→[持仓水平研判]→[多空博弈分析]→[交易建议]\n"
-    f"- 语言简洁专业，突出可操作信号，避免冗余描述\n"
-    f"- 数据呈现：\n"
-    f"  - 关键指标（如相关性、趋势强度）用**粗体**标注\n"
-    f"  - 明确标示操作建议的置信度\n"
-    f"  - 使用要点列表增强可读性\n"
-)
+            f"基于{symbol}期货市场的以下关键数据进行专业市场行为分析：\n\n"
+            f"**市场状态指标**\n"
+            f"- 当前持仓量：{position_data['current_oi']:,.0f}\n"
+            f"- 持仓分位数：{position_data['percentile']:.2f}%（高位>80%，低位<20%）\n"
+            f"- 24小时波动率：{volatility:.2f}%\n\n"
+            f"**多周期价格与持仓对比**\n"
+            f"| 周期 | 价格变化 | 持仓变化 |\n"
+            f"|------|----------|----------|\n"
+            f"| 1小时 | {price_data.get('1h_change', 0):.2f}% | {position_data['changes']['1小时']['change_percentage']:.2f}% |\n"
+            f"| 4小时 | {price_data.get('4h_change', 0):.2f}% | {position_data['changes']['4小时']['change_percentage']:.2f}% |\n"
+            f"| 24小时 | {price_data.get('24h_change', 0):.2f}% | {position_data['changes']['24小时']['change_percentage']:.2f}% |\n\n"
+
+            f"请提供专业的市场行为分析报告，包括以下部分：\n"
+            f"1. **市场行为模式识别**：基于价格与持仓量变化关系识别当前市场行为模式\n"
+            f"2. **多空力量对比**：确定当前主导方向及其强度\n"
+            f"3. **交易策略建议**：提供具体的操作思路和关键价格水平\n\n"
+
+            f"请使用Markdown格式，结构清晰，语言简洁专业，突出可操作信号，避免冗余描述。"
+            f"使用表格对比数据，关键指标用**粗体**标注，明确标示操作建议的置信度。"
+        )
         try:
             response = client.chat.completions.create(
                 model="deepseek-reasoner",
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.7,
-                max_tokens=1000
+                max_tokens=1000,
+                temperature=0.7
             )
             return response.choices[0].message.content
         except Exception as e:
@@ -354,46 +347,33 @@ class BinanceFuturesAnalyzer:
         top_decrease = df.nsmallest(10, 'change_percentage')
 
         prompt = (
-    f"### 分析数据\n"
-    f"基于Binance期货市场USDT交易对的持仓量变化数据进行专业市场分析：\n\n"
-    f"**持仓增加最显著的前10个交易对**\n"
-    f"```\n{top_increase[['symbol', 'change_percentage']].to_string()}\n```\n\n"
-    f"**持仓减少最显著的前10个交易对**\n"
-    f"```\n{top_decrease[['symbol', 'change_percentage']].to_string()}\n```\n\n"
-    
-    f"### 分析要求\n"
-    f"1. **市场情绪分析**：\n"
-    f"   - 基于持仓变化评估整体市场情绪（看多/看空/中性）\n"
-    f"   - 量化情绪强度及其在历史范围内的位置\n"
-    f"   - 识别情绪极端区域及可能的反转信号\n"
-    f"2. **资金流向解读**：\n"
-    f"   - 分析主要资金流入/流出的币种类别（主流币/热门板块/小市值币等）\n"
-    f"   - 评估大额持仓变动背后的可能动机（如套利、对冲、投机等）\n"
-    f"   - 推断潜在市场方向及轮动逻辑\n"
-    f"3. **交易策略建议**：\n"
-    f"   - 提供重点关注币种及其选择理由\n"
-    f"   - 建议具体操作策略（如追踪资金流向、反向操作等）\n"
-    f"   - 明确风险提示及风险管理建议\n\n"
-    
-    f"### 输出规范\n"
-    f"- 使用Markdown格式，结构为：[市场情绪分析]→[资金流向解读]→[交易策略建议]\n"
-    f"- 语言简洁专业，突出可操作信号，避免冗余描述\n"
-    f"- 数据呈现：\n"
-    f"  - 关键指标（如流向强度、相关性）用**粗体**标注\n"
-    f"  - 使用表格对比不同币种类别的资金流向特征\n"
-    f"  - 明确标示策略建议的置信度\n"
-)
+            f"基于Binance期货市场USDT交易对的持仓量变化数据进行专业市场分析：\n\n"
+            f"**持仓增加最显著的前10个交易对**\n"
+            f"```\n{top_increase[['symbol', 'change_percentage']].to_string()}\n```\n\n"
+            f"**持仓减少最显著的前10个交易对**\n"
+            f"```\n{top_decrease[['symbol', 'change_percentage']].to_string()}\n```\n\n"
+
+            f"请提供专业的持仓分析报告，包括以下部分：\n"
+            f"1. **市场情绪分析**：基于持仓变化评估整体市场情绪\n"
+            f"2. **资金流向解读**：分析主要资金流入/流出的币种类别\n"
+            f"3. **交易策略建议**：提供重点关注币种及其选择理由\n\n"
+
+            f"请使用Markdown格式，结构为：[市场情绪分析]→[资金流向解读]→[交易策略建议]。"
+            f"语言简洁专业，突出可操作信号，避免冗余描述。"
+            f"使用表格对比不同币种类别的资金流向特征，关键指标用**粗体**标注。"
+        )
         try:
             response = client.chat.completions.create(
                 model="deepseek-reasoner",
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.7,
-                max_tokens=1000
+                max_tokens=1000,
+                temperature=0.7
             )
             return response.choices[0].message.content
         except Exception as e:
             logger.error(f"生成持仓分析报告失败: {e}")
             return "AI分析生成失败，请稍后重试"
+
 
 def multi_timeframe_analysis(symbol: str) -> dict:
     """多周期分析功能"""
@@ -458,44 +438,30 @@ def multi_timeframe_analysis(symbol: str) -> dict:
     risk["level"] = "高" if len(risk["factors"]) >= 3 else "低" if len(risk["factors"]) <= 1 else "中等"
 
     prompt = (
-    f"### 分析数据\n"
-    f"基于以下多周期技术指标对{symbol}进行全面市场分析：\n\n"
-    f"**核心技术指标**\n"
-    f"- 当前价格：{current_price}\n"
-    f"- 短期趋势（5m/15m）：{short_term_trend}\n"
-    f"- 中期趋势（1h/4h）：{medium_term_trend}\n"
-    f"- RSI指标：{avg_rsi:.2f}\n"
-    f"- 关键价格水平：\n"
-    f"  - 支撑位：{trends['1h']['support']}\n"
-    f"  - 阻力位：{trends['1h']['resistance']}\n"
-    f"- 成交量趋势：{trends['1h']['volume_trend']}\n\n"
-    f"**风险评估**\n"
-    f"- 风险等级：{risk['level']}\n"
-    f"- 风险因素：{', '.join(risk['factors']) if risk['factors'] else '无重大风险'}\n\n"
-    
-    f"### 分析要求\n"
-    f"1. **市场结构分析**：\n"
-    f"   - 基于多周期分析框架评估当前市场阶段（累积、上升、分配、下降）\n"
-    f"   - 量化不同时间周期趋势的一致性及冲突程度\n"
-    f"   - 识别关键价格结构（如高点/低点序列、形态、通道等）\n"
-    f"2. **技术指标综合解读**：\n"
-    f"   - 分析价格趋势与支撑/阻力的相互作用\n"
-    f"   - 评估动量指标（如RSI）的背离/确认信号\n"
-    f"   - 解读成交量与价格关系及其市场含义\n"
-    f"3. **分层次操作建议**：\n"
-    f"   - 提供短期（日内至3天）具体策略及关键价格点位\n"
-    f"   - 建议中期（1-2周）布局思路及风险管理方案\n"
-    f"   - 明确风险因素及应对措施\n\n"
-    
-    f"### 输出规范\n"
-    f"- 使用Markdown格式，结构为：[市场综述]→[技术面分析]→[操作建议]\n"
-    f"- 语言简洁专业，突出可操作信号，避免冗余描述\n"
-    f"- 数据呈现：\n"
-    f"  - 关键指标（如趋势强度、背离程度）用**粗体**标注\n"
-    f"  - 明确标示不同时间周期的信号一致性\n"
-    f"  - 使用要点列表增强可读性\n"
-    f"  - 价格目标使用具体数值而非百分比\n"
-)
+        f"基于以下多周期技术指标对{symbol}进行全面市场分析：\n\n"
+        f"**核心技术指标**\n"
+        f"- 当前价格：{current_price}\n"
+        f"- 短期趋势（5m/15m）：{short_term_trend}\n"
+        f"- 中期趋势（1h/4h）：{medium_term_trend}\n"
+        f"- RSI指标：{avg_rsi:.2f}\n"
+        f"- 关键价格水平：\n"
+        f"  - 支撑位：{trends['1h']['support']}\n"
+        f"  - 阻力位：{trends['1h']['resistance']}\n"
+        f"- 成交量趋势：{trends['1h']['volume_trend']}\n\n"
+        f"**风险评估**\n"
+        f"- 风险等级：{risk['level']}\n"
+        f"- 风险因素：{', '.join(risk['factors']) if risk['factors'] else '无重大风险'}\n\n"
+
+        f"请提供专业的多周期分析报告，包括以下部分：\n"
+        f"1. **市场结构分析**：基于多周期分析框架评估当前市场阶段\n"
+        f"2. **技术指标综合解读**：分析价格趋势与支撑/阻力的相互作用\n"
+        f"3. **分层次操作建议**：提供短期和中期具体策略及关键价格点位\n\n"
+
+        f"请使用Markdown格式，结构为：[市场综述]→[技术面分析]→[操作建议]。"
+        f"语言简洁专业，突出可操作信号，避免冗余描述。"
+        f"关键指标用**粗体**标注，明确标示不同时间周期的信号一致性，使用表格增强可读性。"
+    )
+
     try:
         response = client.chat.completions.create(
             model="deepseek-reasoner",
@@ -515,8 +481,10 @@ def multi_timeframe_analysis(symbol: str) -> dict:
         "ai_analysis": ai_analysis
     }
 
+
 class FundFlowAnalyzer:
     """资金流向分析器"""
+
     def __init__(self):
         self.spot_base_url = "https://api.binance.com/api/v3"
         self.futures_base_url = "https://fapi.binance.com/fapi/v1"
@@ -534,16 +502,16 @@ class FundFlowAnalyzer:
                 symbol = item['symbol']
                 base_asset = item['baseAsset']
                 if (item['status'] == 'TRADING' and
-                    item['quoteAsset'] == 'USDT' and
-                    base_asset not in self.stablecoins):
+                        item['quoteAsset'] == 'USDT' and
+                        base_asset not in self.stablecoins):
                     symbols.append(symbol)
         else:
             for item in data['symbols']:
                 symbol = item['symbol']
                 base_asset = item['baseAsset']
                 if (item['status'] == 'TRADING' and
-                    item['quoteAsset'] == 'USDT' and
-                    base_asset not in self.stablecoins):
+                        item['quoteAsset'] == 'USDT' and
+                        base_asset not in self.stablecoins):
                     symbols.append(symbol)
         return symbols
 
@@ -560,6 +528,7 @@ class FundFlowAnalyzer:
         """使用线程池并行获取多个交易对的K线数据（基于最近完成的 4H K线，可选最新价格）"""
         results = []
         failed_symbols = []
+
         def fetch_kline(symbol):
             try:
                 base_url = self.futures_base_url if is_futures else self.spot_base_url
@@ -667,7 +636,7 @@ class FundFlowAnalyzer:
         )
         try:
             response = client.chat.completions.create(
-                model="deepseek-chat",
+                model="deepseek-reasoner",
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=1000,
                 temperature=0.7
@@ -824,3 +793,4 @@ def main():
 # 运行主程序
 if __name__ == "__main__":
     main()
+
