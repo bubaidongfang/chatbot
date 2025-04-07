@@ -26,7 +26,7 @@ st.set_page_config(
 )
 
 # API配置
-OPENAI_API_KEY = "xxx"  # 更新为自己在tu-zi中的API
+OPENAI_API_KEY = "xxxxxx"  # 更新为自己在tu-zi中的API
 BINANCE_API_URL = "https://api-gcp.binance.com"  # 更新为官方推荐的现货API端点
 BINANCE_FUTURES_URL = "https://fapi.binance.com"
 
@@ -292,21 +292,64 @@ class BinanceFuturesAnalyzer:
 
     def analyze_market_behavior(self, symbol: str, position_data: dict) -> str:
         """分析市场行为并生成AI报告"""
+        # 初始化价格数据字典
         price_data = {}
-        for period, hours in [('1h', 1), ('4h', 4), ('1d', 24)]:
-            df = get_binance_klines(symbol, period, limit=2)
-            if not df.empty:
-                price_change = ((float(df['close'].iloc[-1]) - float(df['open'].iloc[0]))
-                                / float(df['open'].iloc[0])) * 100
-                price_data[f'{hours}h_change'] = price_change
 
+        # 获取当前价格
+        current_price_df = get_binance_klines(symbol, '1m', limit=1)
+        if current_price_df.empty or len(current_price_df) < 1:
+            error_msg = f"无法获取{symbol}当前价格数据"
+            logger.error(error_msg)
+            return error_msg
+
+        current_price = float(current_price_df['close'].iloc[-1])
+        logger.info(f"{symbol}当前价格: {current_price}")
+
+        # 获取各周期价格变化
+        periods = [('1h', 1, '1h_change'), ('4h', 4, '4h_change'), ('1d', 24, '24h_change')]
+
+        for period, hours, key in periods:
+            # 获取足够的K线数据
+            df = get_binance_klines(symbol, period, limit=30)
+
+            if df.empty:
+                error_msg = f"无法获取{symbol} {period}周期K线数据"
+                logger.error(error_msg)
+                return error_msg
+
+            if len(df) < 2:
+                error_msg = f"{symbol} {period}周期K线数据不足，需要至少2根K线，实际获取{len(df)}根"
+                logger.error(error_msg)
+                return error_msg
+
+            # 使用最新收盘价与上一根K线的收盘价比较
+            previous_price = float(df['close'].iloc[-2])
+            price_change = ((current_price - previous_price) / previous_price) * 100
+
+            price_data[key] = price_change
+            logger.info(
+                f"{symbol} {period}周期价格变化: {price_change:.2f}%, 当前价格:{current_price}, 对比价格:{previous_price}")
+
+        # 获取日线波动率
         daily_klines = get_binance_klines(symbol, '1d', limit=1)
-        volatility = 0
-        if not daily_klines.empty:
-            high = float(daily_klines['high'].iloc[0])
-            low = float(daily_klines['low'].iloc[0])
-            volatility = ((high - low) / low) * 100
+        if daily_klines.empty or len(daily_klines) < 1:
+            error_msg = f"无法获取{symbol}日线波动率数据"
+            logger.error(error_msg)
+            return error_msg
 
+        high = float(daily_klines['high'].iloc[0])
+        low = float(daily_klines['low'].iloc[0])
+        volatility = ((high - low) / low) * 100
+
+        # 验证所有必要的数据都已获取
+        required_keys = ['1h_change', '4h_change', '24h_change']
+        if not all(key in price_data for key in required_keys):
+            missing_keys = [key for key in required_keys if key not in price_data]
+            error_msg = f"缺少必要的价格数据: {missing_keys}"
+            logger.error(error_msg)
+            return error_msg
+
+        # 构建提示
         prompt = (
             f"基于{symbol}期货市场的以下关键数据进行专业市场行为分析：\n\n"
             f"**市场状态指标**\n"
@@ -316,9 +359,9 @@ class BinanceFuturesAnalyzer:
             f"**多周期价格与持仓对比**\n"
             f"| 周期 | 价格变化 | 持仓变化 |\n"
             f"|------|----------|----------|\n"
-            f"| 1小时 | {price_data.get('1h_change', 0):.2f}% | {position_data['changes']['1小时']['change_percentage']:.2f}% |\n"
-            f"| 4小时 | {price_data.get('4h_change', 0):.2f}% | {position_data['changes']['4小时']['change_percentage']:.2f}% |\n"
-            f"| 24小时 | {price_data.get('24h_change', 0):.2f}% | {position_data['changes']['24小时']['change_percentage']:.2f}% |\n\n"
+            f"| 1小时 | {price_data['1h_change']:.2f}% | {position_data['changes']['1小时']['change_percentage']:.2f}% |\n"
+            f"| 4小时 | {price_data['4h_change']:.2f}% | {position_data['changes']['4小时']['change_percentage']:.2f}% |\n"
+            f"| 24小时 | {price_data['24h_change']:.2f}% | {position_data['changes']['24小时']['change_percentage']:.2f}% |\n\n"
 
             f"请提供专业的市场行为分析报告，包括以下部分：\n"
             f"1. **市场行为模式识别**：基于价格与持仓量变化关系识别当前市场行为模式\n"
@@ -327,6 +370,42 @@ class BinanceFuturesAnalyzer:
 
             f"请使用Markdown格式，结构清晰，语言简洁专业，突出可操作信号，避免冗余描述。"
             f"使用表格对比数据，关键指标用**粗体**标注，明确标示操作建议的置信度。"
+        )
+
+        try:
+            response = client.chat.completions.create(
+                model="deepseek-reasoner",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=4000,
+                temperature=0.7
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            error_msg = f"生成AI分析报告失败: {e}"
+            logger.error(error_msg)
+            return error_msg
+
+    def generate_position_report(self, df: pd.DataFrame) -> str:
+        """生成持仓分析AI报告"""
+        df['change_percentage'] = df.apply(lambda x: x['changes']['24小时']['change_percentage'], axis=1)
+        top_increase = df.nlargest(10, 'change_percentage')
+        top_decrease = df.nsmallest(10, 'change_percentage')
+
+        prompt = (
+            f"基于Binance期货市场USDT交易对的持仓量变化数据进行专业市场分析：\n\n"
+            f"**持仓增加最显著的前10个交易对**\n"
+            f"```\n{top_increase[['symbol', 'change_percentage']].to_string()}\n```\n\n"
+            f"**持仓减少最显著的前10个交易对**\n"
+            f"```\n{top_decrease[['symbol', 'change_percentage']].to_string()}\n```\n\n"
+
+            f"请提供专业的持仓分析报告，包括以下部分：\n"
+            f"1. **市场情绪分析**：基于持仓变化评估整体市场情绪\n"
+            f"2. **资金流向解读**：分析主要资金流入/流出的币种类别\n"
+            f"3. **交易策略建议**：提供重点关注币种及其选择理由\n\n"
+
+            f"请使用Markdown格式，结构为：[市场情绪分析]→[资金流向解读]→[交易策略建议]。"
+            f"语言简洁专业，突出可操作信号，避免冗余描述。"
+            f"使用表格对比不同币种类别的资金流向特征，关键指标用**粗体**标注。"
         )
         try:
             response = client.chat.completions.create(
@@ -337,7 +416,7 @@ class BinanceFuturesAnalyzer:
             )
             return response.choices[0].message.content
         except Exception as e:
-            logger.error(f"生成AI分析报告失败: {e}")
+            logger.error(f"生成持仓分析报告失败: {e}")
             return "AI分析生成失败，请稍后重试"
 
     def generate_position_report(self, df: pd.DataFrame) -> str:
