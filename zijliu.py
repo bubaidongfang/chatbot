@@ -232,7 +232,7 @@ def add_symbol():
 def remove_symbol(symbol):
     if symbol in st.session_state.symbols:
         st.session_state.symbols.remove(symbol)
-        st.rerun()
+        st.experimental_rerun()
 
 
 # 开始分析函数
