@@ -752,9 +752,9 @@ def send_to_deepseek(data):
     try:
         # 使用OpenAI客户端发送请求（使用tu-zi.com的API）
         response = client.chat.completions.create(
-            model="deepseek-reasoner",
+            model="deepseek-chat",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=4000,
+            max_tokens=10000,
             temperature=0.7
         )
         return response.choices[0].message.content
